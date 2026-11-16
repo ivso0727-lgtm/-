@@ -1,0 +1,445 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>SPONGE ASMR 3D</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#b9a99a;font-family:Arial,sans-serif;color:white}
+canvas{display:block;touch-action:none}
+#ui{position:fixed;inset:0;pointer-events:none}
+.top{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.panel{background:#29201dcc;border:1px solid #ffffff55;backdrop-filter:blur(14px);border-radius:17px;padding:12px 17px;box-shadow:0 8px 25px #0003}
+.logo{font-size:19px;font-weight:900;letter-spacing:2px}
+.score{font-size:17px;margin-top:5px}
+.meter{width:min(42vw,340px);text-align:center}
+.meter b{font-size:14px}
+.track{height:12px;background:#ffffff35;border-radius:20px;margin-top:8px;overflow:hidden}
+#bar{height:100%;width:0%;background:linear-gradient(90deg,#a6eaff,#fff);border-radius:20px;transition:width .2s}
+button{pointer-events:auto;border:1px solid #ffffff66;background:#29201dcc;color:white;padding:12px 16px;border-radius:14px;font-size:14px;cursor:pointer}
+#help{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);white-space:nowrap;text-align:center;background:#29201ddd;border:1px solid #ffffff55;border-radius:30px;padding:14px 22px;font-size:14px;box-shadow:0 5px 25px #0004}
+#sound{position:absolute;right:18px;bottom:85px}
+#loading{position:fixed;inset:0;display:grid;place-items:center;background:#b9a99a;color:white;font-size:20px;z-index:10}
+@media(max-width:600px){
+ .top{top:10px;left:9px;right:9px}
+ .panel{padding:10px}
+ .logo{font-size:14px}
+ .score{font-size:14px}
+ .meter{width:37vw}
+ .meter b{font-size:11px}
+ button{padding:10px;font-size:12px}
+ #help{bottom:16px;font-size:12px;padding:12px 15px}
+}
+</style>
+</head>
+<body>
+<div id="loading">Загружаем 3D-мир...</div>
+<div id="ui">
+ <div class="top">
+  <div class="panel">
+   <div class="logo">🧽 SPONGE ASMR</div>
+   <div class="score">⭐ <span id="score">0</span></div>
+  </div>
+  <div class="panel meter">
+   <b>🫧 ПЕНА: <span id="percent">0</span>%</b>
+   <div class="track"><div id="bar"></div></div>
+  </div>
+  <button id="reset">↻ Сброс</button>
+ </div>
+ <button id="sound">🔊 Звук</button>
+ <div id="help">Зажми губку, чтобы мять её и создавать пену</div>
+</div>
+
+<script type="importmap">
+{
+ "imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+ }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+
+const loading=document.getElementById("loading");
+const scoreEl=document.getElementById("score");
+const percentEl=document.getElementById("percent");
+const bar=document.getElementById("bar");
+const help=document.getElementById("help");
+
+let scene,camera,renderer, sponge, spongeGroup, water;
+let squeezing=false, score=0, foamLevel=0;
+let bubbles=[], foamBalls=[];
+let audio=null,soundOn=true,lastSound=0;
+let clock=new THREE.Clock();
+
+try{
+ init();
+ animate();
+ loading.style.display="none";
+}catch(error){
+ loading.textContent="Не удалось загрузить 3D. Проверь интернет и обнови страницу.";
+ console.error(error);
+}
+
+function init(){
+ scene=new THREE.Scene();
+ scene.background=new THREE.Color(0xb8a797);
+ scene.fog=new THREE.Fog(0xb8a797,12,25);
+
+ camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,.1,100);
+ camera.position.set(5.4,5.2,8.5);
+ camera.lookAt(0,1.3,0);
+
+ renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});
+ renderer.setSize(innerWidth,innerHeight);
+ renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+ renderer.shadowMap.enabled=true;
+ renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+ renderer.toneMapping=THREE.ACESFilmicToneMapping;
+ renderer.toneMappingExposure=1.15;
+ document.body.appendChild(renderer.domElement);
+
+ const hemi=new THREE.HemisphereLight(0xfff5e9,0x62544a,2.1);
+ scene.add(hemi);
+
+ const key=new THREE.DirectionalLight(0xffe2bd,3.4);
+ key.position.set(-4,8,5);
+ key.castShadow=true;
+ key.shadow.mapSize.set(2048,2048);
+ key.shadow.camera.left=-7;key.shadow.camera.right=7;
+ key.shadow.camera.top=7;key.shadow.camera.bottom=-7;
+ scene.add(key);
+
+ const fill=new THREE.PointLight(0xc5eaff,80,14);
+ fill.position.set(4,4,-3);
+ scene.add(fill);
+
+ const floorMat=new THREE.MeshStandardMaterial({color:0x9b8776,roughness:.38});
+ const floor=new THREE.Mesh(new THREE.PlaneGeometry(200,200),floorMat);
+ floor.rotation.x=-Math.PI/2;
+ floor.position.y=-.12;
+ floor.receiveShadow=true;
+ scene.add(floor);
+
+ createSink();
+ createSponge();
+ createFoam();
+ createDecor();
+
+ window.addEventListener("resize",resize);
+ renderer.domElement.addEventListener("pointerdown",startSqueeze);
+ window.addEventListener("pointerup",stopSqueeze);
+ window.addEventListener("pointercancel",stopSqueeze);
+ document.getElementById("reset").onclick=reset;
+ document.getElementById("sound").onclick=()=>{
+  soundOn=!soundOn;
+  document.getElementById("sound").textContent=soundOn?"🔊 Звук":"🔇 Звук";
+ };
+}
+
+function createSink(){
+ const metal=new THREE.MeshStandardMaterial({
+  color:0xbfc3c3,metalness:.78,roughness:.22
+ });
+ const points=[
+  new THREE.Vector2(0,1.0),
+  new THREE.Vector2(2.3,1.0),
+  new THREE.Vector2(2.55,.85),
+  new THREE.Vector2(2.4,.25),
+  new THREE.Vector2(2.05,.02),
+  new THREE.Vector2(0,.02)
+ ];
+ const bowlGeo=new THREE.LatheGeometry(points,96);
+ const bowl=new THREE.Mesh(bowlGeo,metal);
+ bowl.position.y=.05;
+ bowl.scale.set(1.1,1,1);
+ bowl.receiveShadow=true;
+ bowl.castShadow=true;
+ scene.add(bowl);
+
+ const rim=new THREE.Mesh(
+  new THREE.TorusGeometry(2.5,.105,18,100),
+  new THREE.MeshStandardMaterial({color:0xd8d9d7,metalness:.8,roughness:.2})
+ );
+ rim.rotation.x=Math.PI/2;
+ rim.position.y=1.02;
+ rim.scale.set(1.1,1,1);
+ scene.add(rim);
+
+ const waterMat=new THREE.MeshPhysicalMaterial({
+  color:0x9bd8e6,transparent:true,opacity:.55,
+  roughness:.12,metalness:.05,clearcoat:1
+ });
+ water=new THREE.Mesh(new THREE.CircleGeometry(2.25,96),waterMat);
+ water.rotation.x=-Math.PI/2;
+ water.position.y=.48;
+ water.scale.x=1.08;
+ scene.add(water);
+
+ const drain=new THREE.Mesh(
+  new THREE.CylinderGeometry(.25,.25,.035,48),
+  new THREE.MeshStandardMaterial({color:0x747b7e,metalness:.9,roughness:.25})
+ );
+ drain.position.set(.8,.5,.5);
+ scene.add(drain);
+}
+
+function makeSpongeTexture(){
+ const c=document.createElement("canvas");
+ c.width=512;c.height=512;
+ const ctx=c.getContext("2d");
+ ctx.fillStyle="#e9ae35";
+ ctx.fillRect(0,0,512,512);
+
+ for(let i=0;i<15000;i++){
+  const x=Math.random()*512,y=Math.random()*512;
+  const r=1+Math.random()*5;
+  ctx.beginPath();
+  ctx.ellipse(x,y,r,r*(.6+Math.random()),0,0,Math.PI*2);
+  ctx.fillStyle=Math.random()>.48?"#b87520":"#ffe17a";
+  ctx.globalAlpha=.12+Math.random()*.35;
+  ctx.fill();
+ }
+ ctx.globalAlpha=1;
+
+ for(let i=0;i<950;i++){
+  const x=Math.random()*512,y=Math.random()*512;
+  const r=1+Math.random()*4;
+  ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle="#8f541c";ctx.globalAlpha=.18;
+  ctx.fill();
+ }
+ ctx.globalAlpha=1;
+ const tex=new THREE.CanvasTexture(c);
+ tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+ tex.colorSpace=THREE.SRGBColorSpace;
+ return tex;
+}
+
+function roundedBox(w,h,d,r,segments=12){
+ const geo=new THREE.BoxGeometry(w,h,d,segments,segments,segments);
+ const pos=geo.attributes.position;
+ const half=new THREE.Vector3(w/2-r,h/2-r,d/2-r);
+ for(let i=0;i<pos.count;i++){
+  const p=new THREE.Vector3().fromBufferAttribute(pos,i);
+  const inner=new THREE.Vector3(
+   THREE.MathUtils.clamp(p.x,-half.x,half.x),
+   THREE.MathUtils.clamp(p.y,-half.y,half.y),
+   THREE.MathUtils.clamp(p.z,-half.z,half.z)
+  );
+  const delta=p.clone().sub(inner);
+  if(delta.length()>0){
+   delta.normalize().multiplyScalar(r);
+   p.copy(inner.add(delta));
+   pos.setXYZ(i,p.x,p.y,p.z);
+  }
+ }
+ geo.computeVertexNormals();
+ return geo;
+}
+
+function createSponge(){
+ spongeGroup=new THREE.Group();
+ scene.add(spongeGroup);
+
+ const texture=makeSpongeTexture();
+ const material=new THREE.MeshStandardMaterial({
+  map:texture,
+  color:0xffd15a,
+  roughness:.91,
+  bumpMap:texture,
+  bumpScale:.075
+ });
+
+ const geo=roundedBox(3.15,1.45,1.85,.32,24);
+ sponge=new THREE.Mesh(geo,material);
+ sponge.castShadow=true;
+ sponge.receiveShadow=true;
+ spongeGroup.add(sponge);
+ spongeGroup.position.set(0,1.85,0);
+ spongeGroup.rotation.set(-.12,-.2,-.08);
+
+ const underside=new THREE.Mesh(
+  roundedBox(3.12,.18,1.82,.12,12),
+  new THREE.MeshStandardMaterial({color:0x327b55,roughness:1})
+ );
+ underside.position.y=-.73;
+ sponge.add(underside);
+}
+
+function createFoam(){
+ const mat=new THREE.MeshPhysicalMaterial({
+  color:0xffffff,roughness:.16,metalness:0,
+  transmission:.05,transparent:true,opacity:.92,
+  clearcoat:1,clearcoatRoughness:.08
+ });
+ const geo=new THREE.SphereGeometry(1,16,12);
+ for(let i=0;i<95;i++){
+  const ball=new THREE.Mesh(geo,mat);
+  const a=Math.random()*Math.PI*2;
+  const r=.5+Math.random()*1.9;
+  ball.position.set(Math.cos(a)*r,.53+Math.random()*.15,Math.sin(a)*r);
+  const s=.12+Math.random()*.27;
+  ball.scale.set(s,s*.75,s);
+  ball.visible=false;
+  ball.castShadow=true;
+  scene.add(ball);
+  foamBalls.push(ball);
+ }
+}
+
+function createDecor(){
+ const bottleMat=new THREE.MeshPhysicalMaterial({
+  color:0xd4bca0,roughness:.15,metalness:.05,
+  transparent:true,opacity:.7
+ });
+ const bottle=new THREE.Mesh(
+  new THREE.CylinderGeometry(.25,.3,.9,32),bottleMat
+ );
+ bottle.position.set(-3.1,.55,-1.4);
+ scene.add(bottle);
+
+ const cap=new THREE.Mesh(
+  new THREE.CylinderGeometry(.12,.12,.25,24),
+  new THREE.MeshStandardMaterial({color:0xc6a77f,metalness:.6,roughness:.3})
+ );
+ cap.position.set(-3.1,1.12,-1.4);
+ scene.add(cap);
+
+ const candle=new THREE.Mesh(
+  new THREE.CylinderGeometry(.3,.3,.65,32),
+  new THREE.MeshStandardMaterial({color:0xf2e4ce,roughness:.8})
+ );
+ candle.position.set(3,.32,-1.8);
+ scene.add(candle);
+
+ const glow=new THREE.PointLight(0xffb45e,18,4);
+ glow.position.set(3,.9,-1.8);
+ scene.add(glow);
+}
+
+function startSqueeze(e){
+ if(e.target.closest("button"))return;
+ squeezing=true;
+ help.textContent="🧽 Сжимай губку... ещё больше пены!";
+ if(soundOn)playSqueeze();
+}
+
+function stopSqueeze(){
+ squeezing=false;
+ help.textContent="👆 Зажми губку, чтобы мять её и создавать пену";
+}
+
+function playSqueeze(){
+ if(!soundOn)return;
+ try{
+  if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();
+  if(audio.state==="suspended")audio.resume();
+  const buffer=audio.createBuffer(1,audio.sampleRate*.18,audio.sampleRate);
+  const data=buffer.getChannelData(0);
+  for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*Math.pow(1-i/data.length,2);
+  const src=audio.createBufferSource();
+  const filter=audio.createBiquadFilter();
+  const gain=audio.createGain();
+  src.buffer=buffer;filter.type="lowpass";filter.frequency.value=700;
+  gain.gain.value=.16;
+  src.connect(filter);filter.connect(gain);gain.connect(audio.destination);
+  src.start();
+ }catch(e){}
+}
+
+function spawnBubble(){
+ const material=new THREE.MeshPhysicalMaterial({
+  color:0xe7fbff,transparent:true,opacity:.48,
+  roughness:.05,metalness:.05,clearcoat:1
+ });
+ const bubble=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),material);
+ const size=.035+Math.random()*.11;
+ bubble.scale.set(size,size,size);
+ bubble.position.set(
+  (Math.random()-.5)*3,
+  1.2+Math.random()*1.2,
+  (Math.random()-.5)*1.8
+ );
+ bubble.userData={speed:.7+Math.random()*1.3,drift:(Math.random()-.5)*.5};
+ scene.add(bubble);
+ bubbles.push(bubble);
+}
+
+function updateFoam(){
+ const count=Math.floor(foamLevel/100*foamBalls.length);
+ foamBalls.forEach((b,i)=>{
+  b.visible=i<count;
+  if(i<count){
+   const angle=i*2.4;
+   const radius=.65+(i%8)*.19;
+   b.position.x=Math.cos(angle)*radius;
+   b.position.z=Math.sin(angle)*radius;
+   b.position.y=.57+Math.random()*.008+(i%4)*.055;
+   const s=.15+(i%5)*.035;
+   b.scale.set(s,s*.8,s);
+  }
+ });
+}
+
+function reset(){
+ score=0;foamLevel=0;
+ bubbles.forEach(b=>scene.remove(b));
+ bubbles=[];
+ updateUI();updateFoam();
+}
+
+function updateUI(){
+ scoreEl.textContent=score;
+ percentEl.textContent=Math.round(foamLevel);
+ bar.style.width=foamLevel+"%";
+}
+
+function resize(){
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+}
+
+function animate(){
+ requestAnimationFrame(animate);
+ const dt=Math.min(clock.getDelta(),.04);
+ const t=clock.elapsedTime;
+
+ if(spongeGroup){
+  if(squeezing){
+   sponge.scale.y=THREE.MathUtils.lerp(sponge.scale.y,.67,.2);
+   sponge.scale.x=THREE.MathUtils.lerp(sponge.scale.x,1.06,.12);
+   spongeGroup.rotation.z=Math.sin(t*13)*.035;
+   spongeGroup.position.y=1.72+Math.sin(t*15)*.035;
+   foamLevel=Math.min(100,foamLevel+dt*10);
+   score+=Math.round(dt*20);
+   if(Math.random()<dt*22)spawnBubble();
+   if(t-lastSound>.55){playSqueeze();lastSound=t;}
+  }else{
+   sponge.scale.y=THREE.MathUtils.lerp(sponge.scale.y,1,.09);
+   sponge.scale.x=THREE.MathUtils.lerp(sponge.scale.x,1,.09);
+   spongeGroup.rotation.z=THREE.MathUtils.lerp(spongeGroup.rotation.z,-.08,.08);
+   spongeGroup.position.y=THREE.MathUtils.lerp(spongeGroup.position.y,1.85,.08);
+   foamLevel=Math.max(0,foamLevel-dt*.22);
+  }
+ }
+ bubbles.forEach((b,i)=>{
+  b.position.y+=b.userData.speed*dt;
+  b.position.x+=Math.sin(t*2+i)*dt*b.userData.drift;
+  b.rotation.x+=dt;
+  if(b.position.y>5.5){
+   scene.remove(b);bubbles.splice(i,1);
+  }
+ });
+ if(water)water.position.y=.48+Math.sin(t*2)*.012;
+ updateFoam();
+ updateUI();
+ renderer.render(scene,camera);
+}
+</script>
+</body>
+</html>
